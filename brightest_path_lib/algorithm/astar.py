@@ -170,8 +170,13 @@ class AStarSearch:
             raise TypeError
         self._is_canceled = value
 
-    def search(self) -> List[np.ndarray]:
+    def search(self, verbose : bool = False) -> List[np.ndarray]:
         """Performs A star search to find the brightest path
+
+        Parameters
+        ----------
+        verbose (bool)
+            If True, will print `Found goal!` when goal is found.
 
         Returns
         -------
@@ -205,7 +210,8 @@ class AStarSearch:
             open_set_hash.remove(current_coordinates)
 
             if self._found_goal(current_node.point):
-                print("Found goal!")
+                if verbose:
+                    print("Found goal!")
                 self._construct_path_from(current_node)
                 self.found_path = True
                 break

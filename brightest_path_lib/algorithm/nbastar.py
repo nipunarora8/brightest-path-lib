@@ -220,7 +220,7 @@ class NBAStarSearch:
             raise TypeError
         self._is_canceled = value
 
-    def search(self) -> List[np.ndarray]:
+    def search(self, verbose=False) -> List[np.ndarray]:
         """Performs bidirectional brightest path search
 
         Returns
@@ -251,9 +251,13 @@ class NBAStarSearch:
         self.node_at_coordinates[tuple(self.start_point)] = start_node
         self.node_at_coordinates[tuple(self.goal_point)] = goal_node
         
+        _countPixelsSearched = 0
+
         while not self.open_set_from_start.empty() and not self.open_set_from_goal.empty():
             if self.is_canceled:
                 break
+
+            _countPixelsSearched += 1
 
             from_start = self.open_set_from_start.qsize() < self.open_set_from_goal.qsize()
             if from_start:
@@ -291,8 +295,11 @@ class NBAStarSearch:
                     # stabilize the current node
                     self._expand_neighbors_of(current_node, from_start)
 
+        # print(_countPixelsSearched)
+
         if not self.touch_node:
-            print("NBA* Search finished without finding the path")
+            if verbose:
+                print("NBA* Search finished without finding the path")
             return []
         
         self._construct_path()
