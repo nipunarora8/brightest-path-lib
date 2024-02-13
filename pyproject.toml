@@ -1,3 +1,10 @@
 [build-system]
-requires = ["setuptools", "wheel", "numpy", "transonic"]
+#requires = ["setuptools", "wheel", "numpy", "transonic"]
+requires = ["setuptools>=45", "setuptools_scm[toml]>=6.2", "wheel", "numpy", "transonic"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+write_to = "brightest_path_lib/_version.py"
+version_scheme = "post-release"
+#local_scheme = "dirty-tag"
+local_scheme = "no-local-version"
