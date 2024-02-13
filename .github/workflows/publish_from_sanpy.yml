@@ -34,7 +34,7 @@ jobs:
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.TWINE_API_KEY }}
-          run: |
+        run: |
           git tag
           #python setup.py --version
           python -m build .
