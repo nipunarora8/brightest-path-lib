@@ -1,11 +1,16 @@
 name: Release
 
-on: 
-  workflow_run:
-    workflows: ["Test"]
-    types: [completed]
-    branches: [main]
+# on: 
+#   workflow_run:
+#     workflows: ["Test"]
+#     types: [completed]
+#     branches: [main]
 
+on: 
+    push:
+        tags:
+        - 'v*'
+        
 jobs:
   release-on-push:
     runs-on: ubuntu-latest
