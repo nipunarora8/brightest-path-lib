@@ -4,6 +4,10 @@ Requires
 --------
 pip install pandas, tifffile
 
+Be sure to run from the main repo folder brightest-path-lib with:
+
+    python sandbox/timing.py
+
 """
 
 import os
@@ -16,8 +20,6 @@ import pandas as pd
 import tifffile
 
 from typing import List
-
-import matplotlib
 
 from matplotlib import pyplot as plt
 
@@ -60,64 +62,109 @@ class pmmTracing():
     
 aTracing = pmmTracing()
 
-def runBrightestPath(tifPath, csvPath):
+def runBrightestPath(tifPath, csvPath, doConvert=False):
     
     print('myScript.runBrightestPath()')
     print('   tifPath:', tifPath)
     print('   csvPath:', csvPath)
     
     print('python loading csv with pandas csvPath:', csvPath)
-    df = pd.read_csv(csvPath, header=1)
+    df = pd.read_csv(csvPath)
 
-    #localFile = 'rr30a_s0_ch2_8_bit.tif'
-    print('python loading tifPath:', tifPath)
+    if doConvert:
+        # 202401 process pymapmanager csv into just zyx
+        # I cropped the raw 3d tif keeping slices 19 .. 52
+        df = pd.read_csv(csvPath, header=1)
+        _startCropSlice = 19
+        segmentID = 0
+        roiType = 'controlPnt'
+        df = df[ df['segmentID']==segmentID]
+        df = df[ df['roiType']==roiType]
+        df = df[ (df['z']>=_startCropSlice) & (df['z']<52) ]
+        df['z'] -= _startCropSlice
+        _saveDf = df[['z', 'y', 'x']]
+        print('saving sample-3d.csv')
+        _saveDf.to_csv('sample-3d.csv', index=False)
+        return
+
+    print('loading tifPath:', tifPath)
     image = tifffile.imread(tifPath)
     print('   image:', image.shape)
 
     # reduce to one segmentID and just roiType 'controlPnt'
-    segmentID = 0
-    df = df[ df['segmentID']==segmentID]
-    df = df[ df['roiType']=='controlPnt']
+    # segmentID = 0
+    # df = df[ df['segmentID']==segmentID]
+    # df = df[ df['roiType']=='controlPnt']
 
     # get (z, y, x) value)
     zyx = df[['z', 'y', 'x']].to_numpy()
-    print('   zyx:', zyx.shape)  # (28,3)
+    print('   zyx.shape:', zyx.shape)  # (28,3)
+    # print(zyx)
 
     startTime0 = time.time()
+
     paths = []
     pathLengths = []
     times = []
     queueSize = []
-    step = 1  # 2 to find path between every other control point
+
+    paths2 = []
+    pathLengths2 = []
+    times2 = []
+    queueSize2 = []
+
+    doAStar = True  # faster
+    doNba = False
+    fixStart = True  # if true, will fix first point
+                    # if false, will step start point
+
+    step = 3  # 2 to find path between every other control point
 
     queue = Queue()
 
     pointsToAnalyze = list(range(0, zyx.shape[0], step))
-    for i in pointsToAnalyze:
+    for _idx, i in enumerate(pointsToAnalyze):
         if i+step > zyx.shape[0]-2:
             break
 
-        start = np.array(zyx[i,:])
+        if (not fixStart) or (_idx == 0):
+            start = np.array(zyx[i,:])
         end = np.array(zyx[i+step,:])
 
-        algorithm = brightest_path_lib.algorithm.NBAStarSearch(image, start, end, open_nodes=queue)
-
-        startTime = time.time()
-
-        path = algorithm.search()
+        print(f'   {_idx} {i} start:{start} end:{end}')
         
-        paths.append(path)
+        if doNba:
+            # NBAStarSearch
+            algorithm = brightest_path_lib.algorithm.NBAStarSearch(image, start, end, open_nodes=queue)
 
-        path = np.array(path)
+            startTime = time.time()
+            path = algorithm.search()
+            stopTime = time.time()
+            paths.append(path)
+            path = np.array(path)
+            pathLengths.append(path.shape[0])
 
-        pathLengths.append(path.shape[0])
+            timeItTook = round(stopTime-startTime, 3)
+            times.append(timeItTook)
 
-        stopTime = time.time()
-        timeItTook = round(stopTime-startTime, 3)
-        times.append(timeItTook)
+            queueSize.append(queue.qsize())
+            # print('queue:', queue.qsize())
 
-        queueSize.append(queue.qsize())
-        # print('queue:', queue.qsize())
+        if doAStar:
+            # AStarSearch
+            algorithm = brightest_path_lib.algorithm.AStarSearch(image, start, end, open_nodes=queue)
+
+            startTime = time.time()
+            path = algorithm.search()
+            stopTime = time.time()
+            paths2.append(path)
+            path = np.array(path)
+            pathLengths2.append(path.shape[0])
+
+            timeItTook = round(stopTime-startTime, 3)
+            times2.append(timeItTook)
+
+            queueSize2.append(queue.qsize())
 
         # with printing we lose like 100 ms
         # print(f'   {i} time {timeItTook} start:{start} end:{end}')
@@ -128,7 +175,14 @@ def runBrightestPath(tifPath, csvPath):
     # plot
     maxImage = np.max(image, axis=0)
     zyx = zyx[pointsToAnalyze]
-    plotFigure(maxImage, paths, zyx, pathLengths, times, queueSize)
+    
+    if doNba:
+        plotFigure(maxImage, paths, zyx, pathLengths, times, queueSize)
+
+    if doAStar:
+        plotFigure(maxImage, paths2, zyx, pathLengths2, times2, queueSize2)
+
+    plt.show()
 
 def plotFigure(maxImage, paths, zyx, pathLengths, times,
                queueSize,  # list of queussize
@@ -138,7 +192,7 @@ def plotFigure(maxImage, paths, zyx, pathLengths, times,
     """
 
     # fig, axs = plt.subplots(2, 1, sharex=True)
-    fig, axs = plt.subplots(2, 1, sharex=False)
+    fig, axs = plt.subplots(1, 2, sharex=False)
 
     axs[0].imshow(maxImage, cmap='gray')
 
@@ -170,18 +224,23 @@ def plotFigure(maxImage, paths, zyx, pathLengths, times,
     # trying to set the size, having problems
     # axs[1].scatter(xPlot2, times, s=pathLengths[0:-2])
 
-    axs[1].plot(xPlot1, times, 'o')
+    axs[1].plot(xPlot1, times, 'or')
     
-    # axs[1].set(xlabel="Path Length (points)", ylabel="Time (Sec)")
-    axs[1].set(xlabel="Voxels Visited", ylabel="Time (Sec)")
-    # axs[1].set(xlabel="Start Position (point)", ylabel="Time (Sec)")
+    # _topAxs = axs[1].twiny()
+    # _topAxs.plot(pathLengths, times, 'ok')
+
+    # axs[1].set(xlabel="Path Length (points)", ylabel="Time (s)")
+    axs[1].set(xlabel="Voxels Visited", ylabel="Time (s)")
+    # axs[1].set(xlabel="Start Position (point)", ylabel="Time (s)")
 
     # despine top and right
     axs[1].spines[['right', 'top']].set_visible(False)
 
-    plt.show()
-
 if __name__ == '__main__':
     tifPath = os.path.join('data', 'sample-3d.tif')
-    csvPath = os.path.join('data', 'sample-3d.txt')
+    csvPath = os.path.join('data', 'sample-3d.csv')
     runBrightestPath(tifPath, csvPath)
+
+    # original pmm point annotations (only use controlPnt type)
+    # csvPath = os.path.join('data', 'sample-3d.txt')
+    # runBrightestPath(tifPath, csvPath, doConvert=True)
