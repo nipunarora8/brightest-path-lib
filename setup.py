@@ -8,6 +8,7 @@ here = Path(__file__).parent.absolute()
 sys.path.insert(0, ".")
 
 # VERSION = "1.0.27"
+# from .brightest_path_lib._version import __version__
 
 TRANSONIC_BACKEND = "pythran"
 
@@ -70,6 +71,7 @@ setup(
     },
     license="GNU General Public License, Version 3",
     # version=VERSION,
+    # version=__version__,
     #packages=["brightest_path_lib"],
     #packages=find_packages(),
     packages=packages,
