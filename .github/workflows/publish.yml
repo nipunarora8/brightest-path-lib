@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-        - ["3.8", "cp38"]
+        # - ["3.8", "cp38"]
         - ["3.9", "cp39"]
         - ["3.10", "cp310"]
         - ["3.11", "cp311"]
