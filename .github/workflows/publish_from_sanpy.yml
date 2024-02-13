@@ -1,0 +1,41 @@
+# my twine key is in
+#         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+
+name: Publish brightest-path-lib (cudmore)
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    # this will run when you have tagged a commit, starting with "v*"
+    # and requires that you have put your twine API key in your
+    # github secrets (see readme for details)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source (cudmore)
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # needed so setuptools_scm can get tags
+      - name: Set up Python (cudmore)
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+      - name: Install dependencies (cudmore)
+        run: |
+          python -m pip install --upgrade pip
+          # pip install -U setuptools wheel twine build
+          pip install -U setuptools wheel numpy transonic psutil twine build
+          pip install -U .
+      - name: Build and publish to PyPi (cudmore)
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          git tag
+          #python setup.py --version
+          python -m build .
+          twine upload dist/* --verbose

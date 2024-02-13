@@ -91,7 +91,7 @@ setup(
             "pooch"
         ]
     },
-    python_requires=">=3.9",  # transonic requires >= 3.9
+    python_requires=">=3.8",  # transonic requires >= 3.9
     cmdclass={"build_ext": ParallelBuildExt},
     ext_modules=create_extensions(),
 )
