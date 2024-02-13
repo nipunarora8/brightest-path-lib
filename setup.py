@@ -7,7 +7,7 @@ from transonic.dist import ParallelBuildExt, make_backend_files, init_transonic_
 here = Path(__file__).parent.absolute()
 sys.path.insert(0, ".")
 
-VERSION = "1.0.27"
+# VERSION = "1.0.27"
 
 TRANSONIC_BACKEND = "pythran"
 
@@ -18,8 +18,7 @@ build_dependencies_backends = {
     "numba": ["numba"],
 }
 
-
-setup_requires = []
+setup_requires = ['setuptools_scm']
 setup_requires.extend(build_dependencies_backends[TRANSONIC_BACKEND])
 
 
@@ -70,10 +69,11 @@ setup(
         "Changelog": "https://github.com/mapmanager/brightest-path-lib/releases",
     },
     license="GNU General Public License, Version 3",
-    version=VERSION,
+    # version=VERSION,
     #packages=["brightest_path_lib"],
     #packages=find_packages(),
     packages=packages,
+    use_scm_version=True,
     setup_requires=setup_requires,
     install_requires=["numpy", "transonic"],
     extras_require={
