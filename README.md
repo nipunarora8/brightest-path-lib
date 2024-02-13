@@ -1,6 +1,6 @@
 # brightest-path-lib
 
-[![Python](https://img.shields.io/badge/python-3.7|3.8|3.9|3.10|3.11-blue.svg)](https://www.python.org/downloads/release/python-3111/)
+[![Python](https://img.shields.io/badge/python-3.9|3.10|3.11-blue.svg)](https://www.python.org/downloads/release/python-3111/)
 [![tests](https://github.com/mapmanager/brightest-path-lib/workflows/Test/badge.svg)](https://github.com/mapmanager/brightest-path-lib/actions)
 [![codecov](https://codecov.io/github/mapmanager/brightest-path-lib/branch/main/graph/badge.svg?token=0ZR226588I)](https://codecov.io/github/mapmanager/brightest-path-lib)
 [![OS](https://img.shields.io/badge/OS-Linux|Windows|macOS-blue.svg)]()

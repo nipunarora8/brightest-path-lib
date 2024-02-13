@@ -1,6 +1,6 @@
 # Installation
 
-To use the library, you'll need to have at least Python 3.7 installed on your computer. Once you've verified that you have Python installed, you can follow these steps to install the library:
+To use the library, you'll need to have at least Python 3.9 installed on your computer. Once you've verified that you have Python installed, you can follow these steps to install the library:
 
 ## 1. Install the library using pip
 
