@@ -7,7 +7,7 @@ from transonic.dist import ParallelBuildExt, make_backend_files, init_transonic_
 here = Path(__file__).parent.absolute()
 sys.path.insert(0, ".")
 
-__version__ = "1.0.42"
+__version__ = "1.0.43"
 # from .brightest_path_lib._myVersion import __version__
 
 TRANSONIC_BACKEND = "pythran"
