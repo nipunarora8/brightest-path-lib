@@ -7,8 +7,8 @@ from transonic.dist import ParallelBuildExt, make_backend_files, init_transonic_
 here = Path(__file__).parent.absolute()
 sys.path.insert(0, ".")
 
-# VERSION = "1.0.27"
-# from .brightest_path_lib._version import __version__
+__version__ = "1.0.40"
+# from .brightest_path_lib._myVersion import __version__
 
 TRANSONIC_BACKEND = "pythran"
 
@@ -19,9 +19,9 @@ build_dependencies_backends = {
     "numba": ["numba"],
 }
 
-setup_requires = ['setuptools_scm']
+# setup_requires = ['setuptools_scm']
+setup_requires = []
 setup_requires.extend(build_dependencies_backends[TRANSONIC_BACKEND])
-
 
 def transonize():
     paths = [
@@ -29,7 +29,6 @@ def transonize():
         "brightest_path_lib/heuristic/euclidean_transonic.py"
     ]
     make_backend_files([here / path for path in paths], backend=TRANSONIC_BACKEND)
-
 
 def create_pythran_extensions():
     import numpy as np
@@ -44,7 +43,6 @@ def create_pythran_extensions():
     )
     return extensions
 
-
 def create_extensions():
     transonize()
     return create_pythran_extensions()
@@ -57,20 +55,21 @@ _thisPath = os.path.abspath(os.path.dirname(__file__))
 with open(os.path.abspath(_thisPath+"/README.md")) as f:
     long_description = f.read()
 
-def myversion():
-    from setuptools_scm.version import SEMVER_MINOR, guess_next_simple_semver, release_branch_semver_version
+# def myversion():
+#     from setuptools_scm.version import SEMVER_MINOR, guess_next_simple_semver, release_branch_semver_version
 
-    def my_release_branch_semver_version(version):
-        v = release_branch_semver_version(version)
-        if v == version.format_next_version(guess_next_simple_semver, retain=SEMVER_MINOR):
-            # return version.format_next_version(guess_next_simple_semver, fmt="{guessed}")  # , retain=SEMVER_MINOR)
-            return version.format_next_version(guess_next_simple_semver, fmt="{guessed}", retain=SEMVER_MINOR)
-        return v
+#     def my_release_branch_semver_version(version):
+#         v = release_branch_semver_version(version)
+#         if v == version.format_next_version(guess_next_simple_semver, retain=SEMVER_MINOR):
+#             # return version.format_next_version(guess_next_simple_semver, fmt="{guessed}")  # , retain=SEMVER_MINOR)
+#             return version.format_next_version(guess_next_simple_semver, fmt="{guessed}", retain=SEMVER_MINOR)
+#         return v
 
-    return {
-        'version_scheme': my_release_branch_semver_version,
-        'local_scheme': 'no-local-version',
-    }
+#     return {
+#         'version_scheme': my_release_branch_semver_version,
+#         'local_scheme': 'no-local-version',
+#     }
+    
 setup(
     name="brightest-path-lib",
     description="A library of path-finding algorithms to find the brightest path between points in an image.",
@@ -85,11 +84,11 @@ setup(
     },
     license="GNU General Public License, Version 3",
     # version=VERSION,
-    # version=__version__,
+    version=__version__,
     #packages=["brightest_path_lib"],
     #packages=find_packages(),
     packages=packages,
-    use_scm_version=myversion,  #True,
+    # use_scm_version=myversion,  #True,
     setup_requires=setup_requires,
     install_requires=["numpy", "transonic"],
     extras_require={
