@@ -22,12 +22,16 @@ Contributions are very welcome. Tests can be run with `pytest`, please ensure th
 
 To contribute to this package, first checkout the code. Then create a new virtual environment:
 
-    cd brightest-path-lib
-    python -m venv brightest-venv
-    source brightest-venv/bin/activate
-
+ - With venv
+    python -m venv brightest-env
+    source brightest-env/bin/activate
+ - With conda
+    conda create -y -n brightest-env python=3.9
+    conda activate brightest-env
+    
 Now install the package with the testing dependencies:
 
+    cd brightest-path-lib
     pip install -e '.[test]'
 
 To run the tests:

@@ -27,7 +27,7 @@ With its efficient implementation and intuitive API, this library is a valuable 
 - It supports both grayscale and color images and can handle images of arbitrary sizes.
 - The library also provides support for users to know which points in the image are being considered for the brightest path in real-time so that they display them on the original image.
 
-## Napi Plugin
+## Napari Plugin
 
 We have also created a [Napari Tracing Plugin](https://github.com/mapmanager/napari-tracing) to provide an intuititive graphical-user-interface that uses the `brightest-path-lib`` package. We are using this to trace neuronal dendrites and axons.
 

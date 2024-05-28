@@ -1,4 +1,6 @@
 [build-system]
+# as this 20240527, removing transonic
+#requires = ["setuptools", "wheel", "numpy"]
 requires = ["setuptools", "wheel", "numpy", "transonic"]
 #requires = ["setuptools>=45", "setuptools_scm[toml]>=6.2", "wheel", "numpy", "transonic"]
 build-backend = "setuptools.build_meta"
