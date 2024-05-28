@@ -1,5 +1,7 @@
-# my twine key is in
+# in cudmore, my twine key is in
 #         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+# in mapmanager org
+#          TWINE_PASSWORD: ${{ secrets.TWINE_API_KEY }}
 
 name: Publish brightest to PyPi (cudmore)
 
@@ -33,7 +35,7 @@ jobs:
       - name: Build and publish (cudmore)
         env:
           TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+          TWINE_PASSWORD: ${{ secrets.TWINE_API_KEY }}
         run: |
           git tag
           #python setup.py --version
