@@ -1,4 +1,4 @@
-name: Release
+name: Release (cudmore)
 
 # on: 
 #   workflow_run:
