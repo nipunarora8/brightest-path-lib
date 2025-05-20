@@ -3,7 +3,7 @@ from brightest_path_lib.algorithm import WaypointBidirectionalAStarSearch
 import matplotlib.cm as cm
 
 def create_tube_data(image, start_point, goal_point, waypoints=None, 
-                     view_distance=5, field_of_view=50, zoom_size=50, 
+                     view_distance=0, field_of_view=50, zoom_size=50, 
                      reference_image=None, reference_cmap='gray',
                      reference_alpha=0.7):
     """
@@ -107,7 +107,6 @@ def create_tube_data(image, start_point, goal_point, waypoints=None,
     
     # Pre-compute tangent vectors (direction of travel)
     tangent_vectors = []
-    window_size = view_distance
     
     for i in range(len(path)):
         # Simplified tangent calculation
@@ -264,39 +263,35 @@ def create_tube_data(image, start_point, goal_point, waypoints=None,
                     colored_plane[i, j, 1] = val * (1 - reference_alpha) + rgba[1] * reference_alpha
                     colored_plane[i, j, 2] = val * (1 - reference_alpha) + rgba[2] * reference_alpha
         
-        # Calculate path ahead points
-        look_ahead = min(view_distance, 5)  # Limit for better performance
+        # Calculate path ahead points - MODIFIED: Use exact view_distance parameter
         ahead_points = []
         
-        for i in range(1, look_ahead + 1):
-            next_idx = min(current_idx + i, len(path) - 1)
-            if next_idx == current_idx:
-                break
+        # Only calculate ahead points if view_distance > 0
+        if view_distance > 0:
+            for i in range(1, view_distance + 1):
+                next_idx = min(current_idx + i, len(path) - 1)
+                if next_idx == current_idx:
+                    break
+                    
+                # Vector from current point to next point
+                next_point = path[next_idx]
+                vector = next_point - current_point
                 
-            # Vector from current point to next point
-            next_point = path[next_idx]
-            vector = next_point - current_point
-            
-            # Project onto viewing plane
-            forward_dist = np.dot(vector, forward)
-            
-            # Only show points that are ahead
-            if forward_dist > 0:
-                up_component = np.dot(vector, up)
-                right_component = np.dot(vector, right)
+                # Project onto viewing plane
+                forward_dist = np.dot(vector, forward)
                 
-                # Convert to viewing plane coordinates
-                view_y = plane_size + int(up_component)
-                view_x = plane_size + int(right_component)
-                
-                # Check if within viewing plane
-                if (0 <= view_y < plane_shape[0] and 0 <= view_x < plane_shape[1]):
-                    ahead_points.append((view_y, view_x))
-        
-        # Add path ahead points in red on the colored plane (if it exists)
-        if colored_plane is not None:
-            for y, x in ahead_points:
-                colored_plane[y, x] = [1.0, 0.0, 0.0]  # Red
+                # Only show points that are ahead
+                if forward_dist > 0:
+                    up_component = np.dot(vector, up)
+                    right_component = np.dot(vector, right)
+                    
+                    # Convert to viewing plane coordinates
+                    view_y = plane_size + int(up_component)
+                    view_x = plane_size + int(right_component)
+                    
+                    # Check if within viewing plane
+                    if (0 <= view_y < plane_shape[0] and 0 <= view_x < plane_shape[1]):
+                        ahead_points.append((view_y, view_x))
         
         # Find path points within the current z-slice for visualization
         slice_points = path_array[np.round(path_array[:, 0]).astype(int) == z]
