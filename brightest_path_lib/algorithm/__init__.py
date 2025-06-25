@@ -2,3 +2,6 @@ from .astar import BidirectionalAStarSearch
 from .nbastar import NBAStarSearch
 from .astargpu import AStarCUDASearch
 from .waypointastar import WaypointBidirectionalAStarSearch
+from .waypoint_cc3d import WaypointBidirectionalAStarSearchWithCC
+from .find_spines import find_spines_after_astar
+from .enhanced_waypointastar import EnhancedWaypointAStarSearch
