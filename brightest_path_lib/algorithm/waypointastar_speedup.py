@@ -431,7 +431,7 @@ def create_accurate_settings():
         'max_parallel_workers': None      # Auto-detect optimal workers
     }
 
-def quick_accurate_optimized_search(image, points_list, my_weight_heuristic=1.0, verbose=True, enable_parallel=True):
+def quick_accurate_optimized_search(image, points_list, my_weight_heuristic=2.0, verbose=True, enable_parallel=True):
     
     if verbose:
         print("FAST SEARCH WITH PARALLEL PROCESSING")
