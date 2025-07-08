@@ -23,7 +23,7 @@ def calculate_segment_distance_accurate(point_a_arr, point_b_arr):
 
 
 @dataclass
-class AccurateSearchStrategy:
+class SearchStrategy:
     """Search strategy that prioritizes accuracy"""
     use_hierarchical: bool
     hierarchical_factor: int
@@ -32,7 +32,7 @@ class AccurateSearchStrategy:
     suitable_for_parallel: bool  # Whether this segment can be processed in parallel
 
 
-class AccurateFastOptimizer:
+class Optimizer:
     """Optimizer that maintains accuracy while improving speed"""
     
     def __init__(self, image_shape, enable_parallel=True, max_parallel_workers=None):
@@ -60,11 +60,11 @@ class AccurateFastOptimizer:
         
         print(f"Parallel processing: {self.enable_parallel}, Max workers: {self.max_parallel_workers}")
     
-    def determine_accurate_strategy(self, distance: float, segment_idx: int, total_segments: int) -> AccurateSearchStrategy:
+    def determine_accurate_strategy(self, distance: float, segment_idx: int, total_segments: int) -> SearchStrategy:
         """Determine strategy that maintains accuracy with parallel processing"""
         
         # Default to high accuracy
-        strategy = AccurateSearchStrategy(
+        strategy = SearchStrategy(
             use_hierarchical=False,
             hierarchical_factor=4,
             weight_heuristic=2,  # ALWAYS 1.0 for medical accuracy
@@ -86,14 +86,14 @@ class AccurateFastOptimizer:
             strategy.use_hierarchical = True
             strategy.hierarchical_factor = 4  # Small factor to preserve detail
             strategy.refine_path = True       # Always refine for accuracy
-            strategy.weight_heuristic = 1.0   # Always optimal for medical accuracy
+            strategy.weight_heuristic = 2 
             
         elif self.image_volume > self.large_image_threshold and distance > 400:
             # Only for very long segments on large images
             strategy.use_hierarchical = True
             strategy.hierarchical_factor = 3  # Very conservative factor
             strategy.refine_path = True
-            strategy.weight_heuristic = 1.0   # Always optimal for medical accuracy
+            strategy.weight_heuristic = 2 
         
         return strategy
     
@@ -138,8 +138,7 @@ class AccurateFastOptimizer:
         
         return optimized_points
 
-
-class AccurateFastWaypointSearch:
+class FasterWaypointSearch:
     """Fast waypoint search that maintains high accuracy with parallel processing"""
     
     def __init__(self, image, points_list, **kwargs):
@@ -152,7 +151,7 @@ class AccurateFastWaypointSearch:
         max_parallel_workers = kwargs.get('max_parallel_workers', None)
         
         # Initialize optimizer with parallel settings
-        self.optimizer = AccurateFastOptimizer(
+        self.optimizer = Optimizer(
             image.shape, 
             enable_parallel=enable_parallel,
             max_parallel_workers=max_parallel_workers
@@ -165,7 +164,6 @@ class AccurateFastWaypointSearch:
         if self.verbose:
             print(f"Initializing accurate fast search for image shape: {image.shape}")
             print(f"Image volume: {self.optimizer.image_volume:,} voxels")
-            print(f"Accuracy priority: HIGH (weight_heuristic = 1.0)")
             print(f"Parallel processing: {self.optimizer.enable_parallel}")
     
     def search_segment_accurate_wrapper(self, segment_data):
@@ -188,7 +186,7 @@ class AccurateFastWaypointSearch:
         
         return parallel_results
     
-    def search_segment_accurate(self, point_a, point_b, segment_idx, strategy: AccurateSearchStrategy):
+    def search_segment_accurate(self, point_a, point_b, segment_idx, strategy: SearchStrategy):
         """Search segment with high accuracy"""
         from brightest_path_lib.algorithm.astar import BidirectionalAStarSearch
         from brightest_path_lib.input import CostFunction, HeuristicFunction
@@ -302,11 +300,7 @@ class AccurateFastWaypointSearch:
         """Refine a coarse path by searching in a corridor around it"""
         from brightest_path_lib.algorithm.astar import BidirectionalAStarSearch
         from brightest_path_lib.input import CostFunction, HeuristicFunction
-        
-        # Create a mask of the corridor around the coarse path
-        corridor_width = 10  # pixels
-        
-        # For now, use a simpler approach - just search directly at full resolution
+    
         # This ensures maximum accuracy
         search = BidirectionalAStarSearch(
             image=self.image,
@@ -422,57 +416,6 @@ class AccurateFastWaypointSearch:
         
         return result
 
-
-def quick_accurate_search(image, points_list, verbose=True, enable_parallel=True, **kwargs):
-    """Quick function for accurate fast search with parallel processing"""
-    search = AccurateFastWaypointSearch(
-        image=image,
-        points_list=points_list,
-        verbose=verbose,
-        enable_parallel=enable_parallel,
-        **kwargs
-    )
-    return search.search()
-
-
-def compare_accuracy_vs_speed(image, points_list):
-    """Compare different optimization levels"""
-    
-    print("COMPARING ACCURACY VS SPEED")
-    print("=" * 50)
-    
-    methods = {
-        'Accurate Fast (New)': lambda: quick_accurate_search(image, points_list, verbose=False),
-        'Previous Robust': lambda: None,  # Would need import
-        'Original Slow': lambda: None     # Would need import
-    }
-    
-    results = {}
-    
-    for name, method in methods.items():
-        if method() is None:
-            continue
-            
-        print(f"\nTesting {name}...")
-        
-        start_time = time.time()
-        path = method()
-        end_time = time.time()
-        
-        if path:
-            results[name] = {
-                'time': end_time - start_time,
-                'path_length': len(path),
-                'path': path
-            }
-            print(f"  Time: {end_time - start_time:.2f}s")
-            print(f"  Path length: {len(path)}")
-        else:
-            print(f"  FAILED")
-    
-    return results
-
-
 # Conservative optimization settings for medical use
 def create_accurate_settings():
     """Create settings that prioritize accuracy for medical applications"""
@@ -480,41 +423,27 @@ def create_accurate_settings():
         'max_segment_length': 400,        # Higher threshold
         'enable_refinement': True,        # Always refine hierarchical paths
         'hierarchical_threshold': 100_000_000,  # Only for very large images
-        'weight_heuristic': 1.0,          # ALWAYS optimal for medical accuracy
+        'weight_heuristic': 2,          # ALWAYS optimal for medical accuracy
         'subdivision_limit': 3,           # Maximum 3 subdivisions
         'enable_parallel': True,          # Enable parallel processing
         'max_parallel_workers': None      # Auto-detect optimal workers
     }
 
-
 def quick_accurate_optimized_search(image, points_list, verbose=True, enable_parallel=True):
-    """
-    Recommended function for medical use cases - prioritizes accuracy with parallel speedup
-    
-    This function:
-    1. ALWAYS uses weight_heuristic = 1.0 (optimal paths for medical accuracy)
-    2. Uses BidirectionalAStarSearch (already much faster than unidirectional)
-    3. Parallel processing for multiple segments (no accuracy loss)
-    4. Only applies hierarchical search for very large images with very long segments
-    5. Conservative segment subdivision
-    6. Path refinement when hierarchical search is used
-    7. Auto-detects optimal parallel workers based on CPU and memory
-    """
     
     if verbose:
-        print("ACCURATE FAST SEARCH WITH PARALLEL PROCESSING - MEDICAL GRADE")
+        print("FAST SEARCH WITH PARALLEL PROCESSING")
         print(f"Image shape: {image.shape}")
         print(f"Image volume: {np.prod(image.shape):,} voxels")
         print(f"Number of points: {len(points_list)}")
         print(f"Parallel processing: {enable_parallel}")
-        print("PRIORITY: Maximum accuracy (weight_heuristic = 1.0 always)")
         print()
     
     # Use conservative settings with parallel processing
     settings = create_accurate_settings()
     settings['enable_parallel'] = enable_parallel
     
-    search = AccurateFastWaypointSearch(
+    search = FasterWaypointSearch(
         image=image,
         points_list=points_list,
         verbose=verbose,
@@ -525,12 +454,4 @@ def quick_accurate_optimized_search(image, points_list, verbose=True, enable_par
 
 
 if __name__ == "__main__":
-    print("Accurate Fast Waypoint Search with Parallel Processing")
-    print("Optimized for MEDICAL USE CASES:")
-    print("- MAXIMUM path accuracy (weight_heuristic = 1.0 ALWAYS)")
-    print("- Follows bright structures precisely")
-    print("- Parallel processing for 2-4x additional speedup")
-    print("- Conservative optimizations only")
-    print("- Auto-detects optimal parallel workers")
-    print("- Safe for medical applications")
-    print("- No accuracy compromises")
+    print('lol')
