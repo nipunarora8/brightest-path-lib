@@ -35,9 +35,10 @@ class SearchStrategy:
 class Optimizer:
     """Optimizer that maintains accuracy while improving speed"""
     
-    def __init__(self, image_shape, enable_parallel=True, max_parallel_workers=None):
+    def __init__(self, image_shape, enable_parallel=True, max_parallel_workers=None, my_weight_heuristic=1.0):
         self.image_shape = image_shape
         self.image_volume = np.prod(image_shape)
+        self.my_weight_heuristic = my_weight_heuristic  # Always optimal for medical accuracy
         
         # Conservative thresholds that prioritize accuracy
         self.large_image_threshold = 30_000_000   # Be more conservative
@@ -67,7 +68,7 @@ class Optimizer:
         strategy = SearchStrategy(
             use_hierarchical=False,
             hierarchical_factor=4,
-            weight_heuristic=2,  # ALWAYS 1.0 for medical accuracy
+            weight_heuristic=self.my_weight_heuristic,  # ALWAYS 1.0 for medical accuracy
             refine_path=False,
             suitable_for_parallel=False
         )
@@ -86,14 +87,14 @@ class Optimizer:
             strategy.use_hierarchical = True
             strategy.hierarchical_factor = 4  # Small factor to preserve detail
             strategy.refine_path = True       # Always refine for accuracy
-            strategy.weight_heuristic = 2 
+            strategy.weight_heuristic = self.my_weight_heuristic  # Always optimal
             
         elif self.image_volume > self.large_image_threshold and distance > 400:
             # Only for very long segments on large images
             strategy.use_hierarchical = True
             strategy.hierarchical_factor = 3  # Very conservative factor
             strategy.refine_path = True
-            strategy.weight_heuristic = 2 
+            strategy.weight_heuristic = self.my_weight_heuristic 
         
         return strategy
     
@@ -145,6 +146,7 @@ class FasterWaypointSearch:
         self.image = image
         self.points_list = points_list
         self.verbose = kwargs.get('verbose', True)
+        self.my_weight_heuristic = kwargs.get('weight_heuristic', 1.0) 
         
         # Parallel processing settings
         enable_parallel = kwargs.get('enable_parallel', True)
@@ -226,7 +228,7 @@ class FasterWaypointSearch:
                 cost_function=CostFunction.RECIPROCAL,
                 heuristic_function=HeuristicFunction.EUCLIDEAN,
                 use_hierarchical=False,  # Don't nest hierarchical
-                weight_heuristic=2    # Always optimal
+                weight_heuristic=self.my_weight_heuristic    # Always optimal
             )
             
             hierarchical_path = hierarchical_search.search(verbose=False)
@@ -254,7 +256,7 @@ class FasterWaypointSearch:
                 cost_function=CostFunction.RECIPROCAL,
                 heuristic_function=HeuristicFunction.EUCLIDEAN,
                 use_hierarchical=False,
-                weight_heuristic=2  # Always optimal for accuracy
+                weight_heuristic=self.my_weight_heuristic  # Always optimal for accuracy
             )
             
             segment_path = search.search(verbose=False)
@@ -310,7 +312,7 @@ class FasterWaypointSearch:
             cost_function=CostFunction.RECIPROCAL,
             heuristic_function=HeuristicFunction.EUCLIDEAN,
             use_hierarchical=False,
-            weight_heuristic=2  # Always optimal
+            weight_heuristic=self.my_weight_heuristic  # Always optimal
         )
         
         return search.search(verbose=False)
@@ -423,13 +425,13 @@ def create_accurate_settings():
         'max_segment_length': 400,        # Higher threshold
         'enable_refinement': True,        # Always refine hierarchical paths
         'hierarchical_threshold': 100_000_000,  # Only for very large images
-        'weight_heuristic': 2,          # ALWAYS optimal for medical accuracy
+        'weight_heuristic': 1.0,          # ALWAYS optimal for medical accuracy
         'subdivision_limit': 3,           # Maximum 3 subdivisions
         'enable_parallel': True,          # Enable parallel processing
         'max_parallel_workers': None      # Auto-detect optimal workers
     }
 
-def quick_accurate_optimized_search(image, points_list, verbose=True, enable_parallel=True):
+def quick_accurate_optimized_search(image, points_list, my_weight_heuristic=1.0, verbose=True, enable_parallel=True):
     
     if verbose:
         print("FAST SEARCH WITH PARALLEL PROCESSING")
@@ -441,6 +443,7 @@ def quick_accurate_optimized_search(image, points_list, verbose=True, enable_par
     
     # Use conservative settings with parallel processing
     settings = create_accurate_settings()
+    settings['weight_heuristic'] = my_weight_heuristic
     settings['enable_parallel'] = enable_parallel
     
     search = FasterWaypointSearch(
