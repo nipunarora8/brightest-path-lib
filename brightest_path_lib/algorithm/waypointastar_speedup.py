@@ -1,6 +1,8 @@
 """
-Accurate Fast Waypoint Search
+Accurate Fast Waypoint Search with Nanometer Support
 Optimized for speed while maintaining high path accuracy
+Now works with nanometer-based thresholds while maintaining pixel-based processing
+NO SUBDIVISION - Pure waypoint-to-waypoint processing
 """
 
 import numpy as np
@@ -13,8 +15,20 @@ import psutil
 
 
 @nb.njit(cache=True)
-def calculate_segment_distance_accurate(point_a_arr, point_b_arr):
-    """Calculate 3D distance between points"""
+def calculate_segment_distance_accurate_nm(point_a_arr, point_b_arr, xy_spacing_nm, z_spacing_nm):
+    """Calculate 3D distance between points in nanometers"""
+    # Convert pixel coordinates to nanometers
+    z_diff_nm = (point_b_arr[0] - point_a_arr[0]) * z_spacing_nm
+    y_diff_nm = (point_b_arr[1] - point_a_arr[1]) * xy_spacing_nm
+    x_diff_nm = (point_b_arr[2] - point_a_arr[2]) * xy_spacing_nm
+    
+    distance_sq_nm = z_diff_nm * z_diff_nm + y_diff_nm * y_diff_nm + x_diff_nm * x_diff_nm
+    return np.sqrt(distance_sq_nm)
+
+
+@nb.njit(cache=True)
+def calculate_segment_distance_accurate_pixels(point_a_arr, point_b_arr):
+    """Calculate 3D distance between points in pixels (for internal use)"""
     distance_sq = 0.0
     for i in range(len(point_a_arr)):
         diff = point_b_arr[i] - point_a_arr[i]
@@ -33,16 +47,21 @@ class SearchStrategy:
 
 
 class Optimizer:
-    """Optimizer that maintains accuracy while improving speed"""
+    """Optimizer that maintains accuracy while improving speed - now with nanometer support"""
     
-    def __init__(self, image_shape, enable_parallel=True, max_parallel_workers=None, my_weight_heuristic=1.0):
+    def __init__(self, image_shape, xy_spacing_nm=94.0, z_spacing_nm=500.0, enable_parallel=True, 
+                 max_parallel_workers=None, my_weight_heuristic=1.0):
         self.image_shape = image_shape
         self.image_volume = np.prod(image_shape)
-        self.my_weight_heuristic = my_weight_heuristic  # Always optimal for medical accuracy
+        self.my_weight_heuristic = my_weight_heuristic
         
-        # Conservative thresholds that prioritize accuracy
-        self.large_image_threshold = 30_000_000   # Be more conservative
-        self.huge_image_threshold = 100_000_000   # Only for very large images
+        # Store spacing in nanometers
+        self.xy_spacing_nm = xy_spacing_nm
+        self.z_spacing_nm = z_spacing_nm
+        
+        # Conservative thresholds in nanometers (converted from pixels for compatibility)
+        self.large_image_threshold = 30_000_000   # voxels
+        self.huge_image_threshold = 100_000_000   # voxels
         
         # Parallel processing settings
         self.enable_parallel = enable_parallel
@@ -60,9 +79,10 @@ class Optimizer:
             self.max_parallel_workers = max_parallel_workers
         
         print(f"Parallel processing: {self.enable_parallel}, Max workers: {self.max_parallel_workers}")
+        print(f"Spacing: XY={self.xy_spacing_nm:.1f} nm/pixel, Z={self.z_spacing_nm:.1f} nm/slice")
     
-    def determine_accurate_strategy(self, distance: float, segment_idx: int, total_segments: int) -> SearchStrategy:
-        """Determine strategy that maintains accuracy with parallel processing"""
+    def determine_accurate_strategy(self, distance_nm: float, segment_idx: int, total_segments: int) -> SearchStrategy:
+        """Determine strategy that maintains accuracy with parallel processing - now using nanometer thresholds"""
         
         # Default to high accuracy
         strategy = SearchStrategy(
@@ -73,23 +93,23 @@ class Optimizer:
             suitable_for_parallel=False
         )
         
-        # Determine if suitable for parallel processing
-        # Criteria: moderate to long segments, not too complex
+        # Determine if suitable for parallel processing - using nanometer thresholds
+        # Criteria: moderate to long segments in nanometers, not too complex
         if (self.enable_parallel and 
-            distance > 100 and  # Minimum distance to benefit from parallel
-            distance < 600 and  # Not too complex
-            total_segments > 2):  # Multiple segments available
+            distance_nm > 9400.0 and      # 9.4 μm (was 100 pixels × 94 nm/pixel)
+            distance_nm < 56400.0 and     # 56.4 μm (was 600 pixels × 94 nm/pixel)
+            total_segments > 2):          # Multiple segments available
             strategy.suitable_for_parallel = True
         
-        # Only use hierarchical for very large images and long segments
-        if self.image_volume > self.huge_image_threshold and distance > 300:
+        # Only use hierarchical for very large images and long segments - nanometer thresholds
+        if self.image_volume > self.huge_image_threshold and distance_nm > 28200.0:  # 28.2 μm (300 pixels × 94 nm)
             # Very conservative hierarchical search
             strategy.use_hierarchical = True
             strategy.hierarchical_factor = 4  # Small factor to preserve detail
             strategy.refine_path = True       # Always refine for accuracy
             strategy.weight_heuristic = self.my_weight_heuristic  # Always optimal
             
-        elif self.image_volume > self.large_image_threshold and distance > 400:
+        elif self.image_volume > self.large_image_threshold and distance_nm > 37600.0:  # 37.6 μm (400 pixels × 94 nm)
             # Only for very long segments on large images
             strategy.use_hierarchical = True
             strategy.hierarchical_factor = 3  # Very conservative factor
@@ -97,76 +117,43 @@ class Optimizer:
             strategy.weight_heuristic = self.my_weight_heuristic 
         
         return strategy
-    
-    def intelligent_subdivision(self, points_list, max_segment_length=400):
-        """Very conservative subdivision that maintains path quality"""
-        from brightest_path_lib.algorithm.enhanced_waypointastar import find_start_end_points_optimized
-        
-        # Find optimal start/end points
-        waypoint_coords, start_coords, end_coords = find_start_end_points_optimized(points_list)
-        all_points = [start_coords] + waypoint_coords + [end_coords]
-        
-        # Conservative subdivision - only for extremely long segments
-        optimized_points = [all_points[0]]
-        subdivision_count = 0
-        
-        for i in range(len(all_points) - 1):
-            point_a = np.array(all_points[i], dtype=np.float64)
-            point_b = np.array(all_points[i + 1], dtype=np.float64)
-            
-            distance = calculate_segment_distance_accurate(point_a, point_b)
-            
-            # Only subdivide extremely long segments
-            if distance > max_segment_length:
-                # Conservative subdivision - maximum 3 parts
-                num_subdivisions = min(3, int(np.ceil(distance / max_segment_length)))
-                
-                print(f"Subdividing segment {i+1}: distance={distance:.1f} -> {num_subdivisions} sub-segments")
-                
-                # Add intermediate points
-                for j in range(1, num_subdivisions):
-                    t = j / num_subdivisions
-                    intermediate_point = point_a + t * (point_b - point_a)
-                    optimized_points.append(intermediate_point.astype(np.int32))
-                
-                subdivision_count += num_subdivisions - 1
-            
-            optimized_points.append(all_points[i + 1])
-        
-        if subdivision_count > 0:
-            print(f"Conservative subdivision: {len(points_list)} -> {len(optimized_points)} points "
-                  f"({subdivision_count} subdivisions)")
-        
-        return optimized_points
+
 
 class FasterWaypointSearch:
-    """Fast waypoint search that maintains high accuracy with parallel processing"""
+    """Fast waypoint search that maintains high accuracy with parallel processing - now with nanometer support"""
     
-    def __init__(self, image, points_list, **kwargs):
+    def __init__(self, image, points_list, xy_spacing_nm=94.0, z_spacing_nm=500.0, **kwargs):
         self.image = image
         self.points_list = points_list
         self.verbose = kwargs.get('verbose', True)
         self.my_weight_heuristic = kwargs.get('weight_heuristic', 1.0) 
         
+        # Store spacing
+        self.xy_spacing_nm = xy_spacing_nm
+        self.z_spacing_nm = z_spacing_nm
+        
         # Parallel processing settings
         enable_parallel = kwargs.get('enable_parallel', True)
         max_parallel_workers = kwargs.get('max_parallel_workers', None)
         
-        # Initialize optimizer with parallel settings
+        # Initialize optimizer with parallel settings and spacing
         self.optimizer = Optimizer(
             image.shape, 
+            xy_spacing_nm=xy_spacing_nm,
+            z_spacing_nm=z_spacing_nm,
             enable_parallel=enable_parallel,
             max_parallel_workers=max_parallel_workers
         )
         
-        # Configuration - conservative settings
-        self.max_segment_length = kwargs.get('max_segment_length', 400)  # Longer threshold
+        # Configuration - conservative settings in nanometers
         self.enable_refinement = kwargs.get('enable_refinement', True)
         
         if self.verbose:
             print(f"Initializing accurate fast search for image shape: {image.shape}")
             print(f"Image volume: {self.optimizer.image_volume:,} voxels")
             print(f"Parallel processing: {self.optimizer.enable_parallel}")
+            print(f"Spacing: XY={self.xy_spacing_nm:.1f} nm/pixel, Z={self.z_spacing_nm:.1f} nm/slice")
+            print("NO SUBDIVISION - Pure waypoint-to-waypoint processing")
     
     def search_segment_accurate_wrapper(self, segment_data):
         """Wrapper for parallel processing"""
@@ -193,13 +180,16 @@ class FasterWaypointSearch:
         from brightest_path_lib.algorithm.astar import BidirectionalAStarSearch
         from brightest_path_lib.input import CostFunction, HeuristicFunction
         
-        distance = calculate_segment_distance_accurate(
+        # Calculate distance in nanometers for logging
+        distance_nm = calculate_segment_distance_accurate_nm(
             np.array(point_a, dtype=np.float64), 
-            np.array(point_b, dtype=np.float64)
+            np.array(point_b, dtype=np.float64),
+            self.xy_spacing_nm,
+            self.z_spacing_nm
         )
         
         if self.verbose:
-            print(f"  Segment {segment_idx}: distance={distance:.1f}, "
+            print(f"  Segment {segment_idx}: distance={distance_nm:.1f} nm, "
                   f"hierarchical={strategy.use_hierarchical}, "
                   f"refine={strategy.refine_path}")
         
@@ -318,15 +308,19 @@ class FasterWaypointSearch:
         return search.search(verbose=False)
     
     def search(self):
-        """Perform accurate fast search with parallel processing"""
+        """Perform accurate fast search with parallel processing - NO SUBDIVISION"""
         start_time = time.time()
         
-        # Conservative point optimization
-        all_points = self.optimizer.intelligent_subdivision(
-            self.points_list, self.max_segment_length)
+        # NO SUBDIVISION - Use original waypoints directly
+        from brightest_path_lib.algorithm.enhanced_waypointastar import find_start_end_points_optimized
+        
+        # Find optimal start/end points but don't subdivide anything
+        waypoint_coords, start_coords, end_coords = find_start_end_points_optimized(self.points_list)
+        all_points = [start_coords] + waypoint_coords + [end_coords]
         
         if self.verbose:
-            print(f"Starting accurate fast search with {len(all_points)} points")
+            print(f"Starting accurate fast search with {len(all_points)} waypoints (no subdivision)")
+            print(f"Original points: {len(self.points_list)} -> Optimized points: {len(all_points)}")
         
         # Analyze all segments and determine strategies
         segment_data = []
@@ -336,14 +330,16 @@ class FasterWaypointSearch:
             point_a = all_points[i]
             point_b = all_points[i + 1]
             
-            # Determine strategy for this segment
-            distance = calculate_segment_distance_accurate(
+            # Determine strategy for this segment using nanometer distance
+            distance_nm = calculate_segment_distance_accurate_nm(
                 np.array(point_a, dtype=np.float64), 
-                np.array(point_b, dtype=np.float64)
+                np.array(point_b, dtype=np.float64),
+                self.xy_spacing_nm,
+                self.z_spacing_nm
             )
             
             strategy = self.optimizer.determine_accurate_strategy(
-                distance, i + 1, len(all_points) - 1)
+                distance_nm, i + 1, len(all_points) - 1)
             
             strategies.append(strategy)
             segment_data.append((point_a, point_b, i + 1, strategy))
@@ -418,37 +414,58 @@ class FasterWaypointSearch:
         
         return result
 
-# Conservative optimization settings for medical use
-def create_accurate_settings():
-    """Create settings that prioritize accuracy for medical applications"""
+# Conservative optimization settings for medical use - now with nanometer thresholds
+def create_accurate_settings_nm(xy_spacing_nm=94.0, z_spacing_nm=500.0):
+    """Create settings that prioritize accuracy for medical applications - using nanometer thresholds"""
     return {
-        'max_segment_length': 400,        # Higher threshold
-        'enable_refinement': True,        # Always refine hierarchical paths
-        'hierarchical_threshold': 100_000_000,  # Only for very large images
-        'weight_heuristic': 1.0,          # ALWAYS optimal for medical accuracy
-        'subdivision_limit': 3,           # Maximum 3 subdivisions
-        'enable_parallel': True,          # Enable parallel processing
-        'max_parallel_workers': None      # Auto-detect optimal workers
+        'enable_refinement': True,             # Always refine hierarchical paths
+        'hierarchical_threshold': 100_000_000, # Only for very large images
+        'weight_heuristic': 1.0,               # ALWAYS optimal for medical accuracy
+        'enable_parallel': True,               # Enable parallel processing
+        'max_parallel_workers': None,          # Auto-detect optimal workers
+        'xy_spacing_nm': xy_spacing_nm,        # XY pixel spacing
+        'z_spacing_nm': z_spacing_nm           # Z slice spacing
     }
 
-def quick_accurate_optimized_search(image, points_list, my_weight_heuristic=2.0, verbose=True, enable_parallel=True):
+def quick_accurate_optimized_search(image, points_list, xy_spacing_nm=94.0, z_spacing_nm=500.0, 
+                                   my_weight_heuristic=1.0, verbose=True, enable_parallel=True):
+    """
+    Quick accurate optimized search with nanometer support - NO SUBDIVISION
+    
+    Args:
+        image: 3D image array
+        points_list: List of [z, y, x] waypoints in pixel coordinates
+        xy_spacing_nm: XY pixel spacing in nanometers per pixel
+        z_spacing_nm: Z slice spacing in nanometers per slice
+        my_weight_heuristic: A* weight heuristic (1.0 = optimal)
+        verbose: Print progress information
+        enable_parallel: Enable parallel processing
+    """
     
     if verbose:
-        print("FAST SEARCH WITH PARALLEL PROCESSING")
+        print("FAST SEARCH WITH PARALLEL PROCESSING AND NANOMETER SUPPORT")
+        print("NO SUBDIVISION - Pure waypoint-to-waypoint processing")
         print(f"Image shape: {image.shape}")
         print(f"Image volume: {np.prod(image.shape):,} voxels")
         print(f"Number of points: {len(points_list)}")
         print(f"Parallel processing: {enable_parallel}")
+        print(f"Spacing: XY={xy_spacing_nm:.1f} nm/pixel, Z={z_spacing_nm:.1f} nm/slice")
         print()
     
-    # Use conservative settings with parallel processing
-    settings = create_accurate_settings()
+    # Use conservative settings with nanometer support
+    settings = create_accurate_settings_nm(xy_spacing_nm, z_spacing_nm)
     settings['weight_heuristic'] = my_weight_heuristic
     settings['enable_parallel'] = enable_parallel
+    
+    # Remove spacing from settings to avoid duplicate keyword arguments
+    settings.pop('xy_spacing_nm', None)
+    settings.pop('z_spacing_nm', None)
     
     search = FasterWaypointSearch(
         image=image,
         points_list=points_list,
+        xy_spacing_nm=xy_spacing_nm,
+        z_spacing_nm=z_spacing_nm,
         verbose=verbose,
         **settings
     )
@@ -457,4 +474,4 @@ def quick_accurate_optimized_search(image, points_list, my_weight_heuristic=2.0,
 
 
 if __name__ == "__main__":
-    print('lol')
+    print('Fast waypoint search with nanometer support ready - NO SUBDIVISION!')
