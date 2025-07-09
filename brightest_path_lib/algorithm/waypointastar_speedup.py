@@ -15,10 +15,10 @@ import psutil
 
 
 @nb.njit(cache=True)
-def calculate_segment_distance_accurate_nm(point_a_arr, point_b_arr, xy_spacing_nm, z_spacing_nm):
+def calculate_segment_distance_accurate_nm(point_a_arr, point_b_arr, xy_spacing_nm):
     """Calculate 3D distance between points in nanometers"""
     # Convert pixel coordinates to nanometers
-    z_diff_nm = (point_b_arr[0] - point_a_arr[0]) * z_spacing_nm
+    z_diff_nm = (point_b_arr[0] - point_a_arr[0])
     y_diff_nm = (point_b_arr[1] - point_a_arr[1]) * xy_spacing_nm
     x_diff_nm = (point_b_arr[2] - point_a_arr[2]) * xy_spacing_nm
     
@@ -49,7 +49,7 @@ class SearchStrategy:
 class Optimizer:
     """Optimizer that maintains accuracy while improving speed - now with nanometer support"""
     
-    def __init__(self, image_shape, xy_spacing_nm=94.0, z_spacing_nm=500.0, enable_parallel=True, 
+    def __init__(self, image_shape, xy_spacing_nm=94.0, enable_parallel=True, 
                  max_parallel_workers=None, my_weight_heuristic=1.0):
         self.image_shape = image_shape
         self.image_volume = np.prod(image_shape)
@@ -57,7 +57,6 @@ class Optimizer:
         
         # Store spacing in nanometers
         self.xy_spacing_nm = xy_spacing_nm
-        self.z_spacing_nm = z_spacing_nm
         
         # Conservative thresholds in nanometers (converted from pixels for compatibility)
         self.large_image_threshold = 30_000_000   # voxels
@@ -79,7 +78,7 @@ class Optimizer:
             self.max_parallel_workers = max_parallel_workers
         
         print(f"Parallel processing: {self.enable_parallel}, Max workers: {self.max_parallel_workers}")
-        print(f"Spacing: XY={self.xy_spacing_nm:.1f} nm/pixel, Z={self.z_spacing_nm:.1f} nm/slice")
+        print(f"Spacing: XY={self.xy_spacing_nm:.1f} nm/pixel")
     
     def determine_accurate_strategy(self, distance_nm: float, segment_idx: int, total_segments: int) -> SearchStrategy:
         """Determine strategy that maintains accuracy with parallel processing - now using nanometer thresholds"""
@@ -122,7 +121,7 @@ class Optimizer:
 class FasterWaypointSearch:
     """Fast waypoint search that maintains high accuracy with parallel processing - now with nanometer support"""
     
-    def __init__(self, image, points_list, xy_spacing_nm=94.0, z_spacing_nm=500.0, **kwargs):
+    def __init__(self, image, points_list, xy_spacing_nm=94.0, **kwargs):
         self.image = image
         self.points_list = points_list
         self.verbose = kwargs.get('verbose', True)
@@ -130,7 +129,6 @@ class FasterWaypointSearch:
         
         # Store spacing
         self.xy_spacing_nm = xy_spacing_nm
-        self.z_spacing_nm = z_spacing_nm
         
         # Parallel processing settings
         enable_parallel = kwargs.get('enable_parallel', True)
@@ -140,7 +138,6 @@ class FasterWaypointSearch:
         self.optimizer = Optimizer(
             image.shape, 
             xy_spacing_nm=xy_spacing_nm,
-            z_spacing_nm=z_spacing_nm,
             enable_parallel=enable_parallel,
             max_parallel_workers=max_parallel_workers
         )
@@ -152,7 +149,7 @@ class FasterWaypointSearch:
             print(f"Initializing accurate fast search for image shape: {image.shape}")
             print(f"Image volume: {self.optimizer.image_volume:,} voxels")
             print(f"Parallel processing: {self.optimizer.enable_parallel}")
-            print(f"Spacing: XY={self.xy_spacing_nm:.1f} nm/pixel, Z={self.z_spacing_nm:.1f} nm/slice")
+            print(f"Spacing: XY={self.xy_spacing_nm:.1f} nm/pixel")
             print("NO SUBDIVISION - Pure waypoint-to-waypoint processing")
     
     def search_segment_accurate_wrapper(self, segment_data):
@@ -185,7 +182,6 @@ class FasterWaypointSearch:
             np.array(point_a, dtype=np.float64), 
             np.array(point_b, dtype=np.float64),
             self.xy_spacing_nm,
-            self.z_spacing_nm
         )
         
         if self.verbose:
@@ -335,7 +331,6 @@ class FasterWaypointSearch:
                 np.array(point_a, dtype=np.float64), 
                 np.array(point_b, dtype=np.float64),
                 self.xy_spacing_nm,
-                self.z_spacing_nm
             )
             
             strategy = self.optimizer.determine_accurate_strategy(
@@ -415,7 +410,7 @@ class FasterWaypointSearch:
         return result
 
 # Conservative optimization settings for medical use - now with nanometer thresholds
-def create_accurate_settings_nm(xy_spacing_nm=94.0, z_spacing_nm=500.0):
+def create_accurate_settings_nm(xy_spacing_nm=94.0):
     """Create settings that prioritize accuracy for medical applications - using nanometer thresholds"""
     return {
         'enable_refinement': True,             # Always refine hierarchical paths
@@ -423,12 +418,11 @@ def create_accurate_settings_nm(xy_spacing_nm=94.0, z_spacing_nm=500.0):
         'weight_heuristic': 1.0,               # ALWAYS optimal for medical accuracy
         'enable_parallel': True,               # Enable parallel processing
         'max_parallel_workers': None,          # Auto-detect optimal workers
-        'xy_spacing_nm': xy_spacing_nm,        # XY pixel spacing
-        'z_spacing_nm': z_spacing_nm           # Z slice spacing
+        'xy_spacing_nm': xy_spacing_nm,        # XY pixel spacing 
     }
 
-def quick_accurate_optimized_search(image, points_list, xy_spacing_nm=94.0, z_spacing_nm=500.0, 
-                                   my_weight_heuristic=1.0, verbose=True, enable_parallel=True):
+def quick_accurate_optimized_search(image, points_list, xy_spacing_nm=94.0,
+                                   my_weight_heuristic=2.0, verbose=True, enable_parallel=True):
     """
     Quick accurate optimized search with nanometer support - NO SUBDIVISION
     
@@ -436,7 +430,6 @@ def quick_accurate_optimized_search(image, points_list, xy_spacing_nm=94.0, z_sp
         image: 3D image array
         points_list: List of [z, y, x] waypoints in pixel coordinates
         xy_spacing_nm: XY pixel spacing in nanometers per pixel
-        z_spacing_nm: Z slice spacing in nanometers per slice
         my_weight_heuristic: A* weight heuristic (1.0 = optimal)
         verbose: Print progress information
         enable_parallel: Enable parallel processing
@@ -449,23 +442,21 @@ def quick_accurate_optimized_search(image, points_list, xy_spacing_nm=94.0, z_sp
         print(f"Image volume: {np.prod(image.shape):,} voxels")
         print(f"Number of points: {len(points_list)}")
         print(f"Parallel processing: {enable_parallel}")
-        print(f"Spacing: XY={xy_spacing_nm:.1f} nm/pixel, Z={z_spacing_nm:.1f} nm/slice")
+        print(f"Spacing: XY={xy_spacing_nm:.1f} nm/pixel")
         print()
     
     # Use conservative settings with nanometer support
-    settings = create_accurate_settings_nm(xy_spacing_nm, z_spacing_nm)
+    settings = create_accurate_settings_nm(xy_spacing_nm)
     settings['weight_heuristic'] = my_weight_heuristic
     settings['enable_parallel'] = enable_parallel
     
     # Remove spacing from settings to avoid duplicate keyword arguments
     settings.pop('xy_spacing_nm', None)
-    settings.pop('z_spacing_nm', None)
     
     search = FasterWaypointSearch(
         image=image,
         points_list=points_list,
         xy_spacing_nm=xy_spacing_nm,
-        z_spacing_nm=z_spacing_nm,
         verbose=verbose,
         **settings
     )
