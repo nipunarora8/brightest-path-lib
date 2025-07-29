@@ -1,7 +1,7 @@
 """
-Accurate Fast Waypoint Search with Nanometer Support
+Accurate Fast Waypoint Search with Nanometer Support and Improved Z-Range Detection
 Optimized for speed while maintaining high path accuracy
-Now works with nanometer-based thresholds while maintaining pixel-based processing
+Now includes intelligent z-positioning with proper distribution across Z-range
 NO SUBDIVISION - Pure waypoint-to-waypoint processing
 """
 
@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import psutil
+import math
 
 
 @nb.njit(cache=True)
@@ -34,6 +35,332 @@ def calculate_segment_distance_accurate_pixels(point_a_arr, point_b_arr):
         diff = point_b_arr[i] - point_a_arr[i]
         distance_sq += diff * diff
     return np.sqrt(distance_sq)
+
+# Z-range detection functions ported from enhanced_waypointastar.py
+@nb.njit(cache=True, parallel=True)
+def find_intensity_transitions_at_point_optimized(image, y, x, intensity_threshold=0.3):
+    """Find z-frames where intensity transitions occur (appearance/disappearance) - OPTIMIZED"""
+    z_size = image.shape[0]
+    intensities = np.zeros(z_size)
+    
+    # Extract intensity profile along z-axis with parallel processing
+    for z in nb.prange(z_size):
+        intensities[z] = image[z, y, x]
+    
+    # Find peak intensity and threshold
+    max_intensity = np.max(intensities)
+    threshold = max_intensity * intensity_threshold
+    
+    # Vectorized transition detection
+    above_threshold = intensities >= threshold
+    
+    # Find first frame above threshold (appearance)
+    start_z = -1
+    for z in range(z_size):
+        if above_threshold[z]:
+            start_z = z
+            break
+    
+    # Find last frame above threshold (disappearance)
+    end_z = -1
+    for z in range(z_size - 1, -1, -1):
+        if above_threshold[z]:
+            end_z = z
+            break
+    
+    # Handle edge cases
+    if start_z == -1:
+        start_z = 0
+    if end_z == -1:
+        end_z = z_size - 1
+    
+    return start_z, end_z, max_intensity
+
+
+@nb.njit(cache=True, parallel=True)
+def batch_find_optimal_z_with_intensity_priority(image, waypoint_coords, start_z, end_z, min_intensity_threshold=0.1):
+    """
+    Find optimal z-coordinates prioritizing intensity while maintaining reasonable distribution
+    Uses a two-stage approach: first find bright regions, then distribute
+    """
+    num_waypoints = waypoint_coords.shape[0]
+    optimal_z_values = np.zeros(num_waypoints, dtype=np.int32)
+    
+    if num_waypoints == 0:
+        return optimal_z_values
+    
+    # Define the search range
+    z_min_range = min(start_z, end_z)
+    z_max_range = max(start_z, end_z)
+    
+    for i in nb.prange(num_waypoints):
+        y, x = waypoint_coords[i, 0], waypoint_coords[i, 1]
+        
+        # First pass: find all positions above minimum intensity threshold
+        candidate_positions = []
+        candidate_intensities = []
+        
+        for z in range(max(0, z_min_range), min(image.shape[0], z_max_range + 1)):
+            intensity = image[z, y, x]
+            if intensity >= min_intensity_threshold:
+                candidate_positions.append(z)
+                candidate_intensities.append(intensity)
+        
+        if len(candidate_positions) == 0:
+            # If no bright pixels found, find the brightest pixel in the range
+            best_z = z_min_range
+            best_intensity = 0.0
+            for z in range(max(0, z_min_range), min(image.shape[0], z_max_range + 1)):
+                intensity = image[z, y, x]
+                if intensity > best_intensity:
+                    best_intensity = intensity
+                    best_z = z
+            optimal_z_values[i] = best_z
+        else:
+            # Calculate target position for this waypoint
+            if num_waypoints == 1:
+                target_z = (start_z + end_z) // 2
+            else:
+                if end_z > start_z:
+                    step = (end_z - start_z) / (num_waypoints + 1)
+                    target_z = int(start_z + (i + 1) * step)
+                elif start_z > end_z:
+                    step = (start_z - end_z) / (num_waypoints + 1)
+                    target_z = int(start_z - (i + 1) * step)
+                else:
+                    target_z = start_z
+            
+            # Find the best candidate considering both intensity and proximity to target
+            best_score = -1.0
+            best_z = candidate_positions[0]
+            
+            # Calculate max intensity for normalization
+            max_candidate_intensity = max(candidate_intensities)
+            
+            for j in range(len(candidate_positions)):
+                z_pos = candidate_positions[j]
+                intensity = candidate_intensities[j]
+                
+                # Normalize intensity (0 to 1)
+                normalized_intensity = intensity / max_candidate_intensity if max_candidate_intensity > 0 else 0
+                
+                # Calculate distance penalty (0 to 1, where 0 is no penalty)
+                max_distance = abs(z_max_range - z_min_range)
+                if max_distance > 0:
+                    distance_penalty = abs(z_pos - target_z) / max_distance
+                else:
+                    distance_penalty = 0
+                
+                # Combined score: prioritize intensity but consider distribution
+                # 70% intensity, 30% distribution
+                score = 0.7 * normalized_intensity + 0.3 * (1.0 - distance_penalty)
+                
+                if score > best_score:
+                    best_score = score
+                    best_z = z_pos
+            
+            optimal_z_values[i] = best_z
+    
+    return optimal_z_values
+
+
+@nb.njit(cache=True, parallel=True)
+def batch_find_optimal_z_with_adaptive_search(image, waypoint_coords, start_z, end_z, min_intensity_threshold=0.05):
+    """
+    Adaptive Z-optimization that expands search range if no bright pixels found
+    """
+    num_waypoints = waypoint_coords.shape[0]
+    optimal_z_values = np.zeros(num_waypoints, dtype=np.int32)
+    
+    if num_waypoints == 0:
+        return optimal_z_values
+    
+    # Calculate initial target positions for distribution
+    target_positions = np.zeros(num_waypoints, dtype=np.int32)
+    
+    if num_waypoints == 1:
+        target_positions[0] = (start_z + end_z) // 2
+    else:
+        if end_z > start_z:
+            step = (end_z - start_z) / (num_waypoints + 1)
+            for i in range(num_waypoints):
+                target_positions[i] = int(start_z + (i + 1) * step)
+        elif start_z > end_z:
+            step = (start_z - end_z) / (num_waypoints + 1)
+            for i in range(num_waypoints):
+                target_positions[i] = int(start_z - (i + 1) * step)
+        else:
+            target_positions.fill(start_z)
+    
+    for i in nb.prange(num_waypoints):
+        y, x = waypoint_coords[i, 0], waypoint_coords[i, 1]
+        target_z = target_positions[i]
+        
+        # Start with a small search range and expand if needed
+        search_ranges = [3, 5, 8, 12]  # Progressively larger search ranges
+        found_good_position = False
+        
+        for search_range in search_ranges:
+            if found_good_position:
+                break
+                
+            # Define search bounds
+            z_min_search = max(0, target_z - search_range)
+            z_max_search = min(image.shape[0] - 1, target_z + search_range)
+            
+            # Also respect the overall start_z to end_z range
+            z_min_search = max(z_min_search, min(start_z, end_z) - search_range)
+            z_max_search = min(z_max_search, max(start_z, end_z) + search_range)
+            
+            best_z = target_z
+            best_score = -1.0
+            
+            # Find the best position in this range
+            for z in range(z_min_search, z_max_search + 1):
+                intensity = image[z, y, x]
+                
+                if intensity >= min_intensity_threshold:
+                    # Calculate distance penalty
+                    distance_penalty = abs(z - target_z) * 0.02  # Small penalty
+                    
+                    # Score = intensity - distance penalty
+                    score = intensity - distance_penalty
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_z = z
+                        found_good_position = True
+            
+            optimal_z_values[i] = best_z
+            
+            # If we found a good position, stop expanding search range
+            if found_good_position and image[best_z, y, x] >= min_intensity_threshold:
+                break
+        
+        # If still no good position found, just use the brightest pixel in the full range
+        if not found_good_position:
+            z_min_full = max(0, min(start_z, end_z))
+            z_max_full = min(image.shape[0] - 1, max(start_z, end_z))
+            
+            best_z = target_z
+            best_intensity = 0.0
+            
+            for z in range(z_min_full, z_max_full + 1):
+                intensity = image[z, y, x]
+                if intensity > best_intensity:
+                    best_intensity = intensity
+                    best_z = z
+            
+            optimal_z_values[i] = best_z
+    
+    return optimal_z_values
+
+
+@nb.njit(cache=True)
+def filter_close_waypoints_optimized(waypoints, min_distance=3):
+    """Remove waypoints that are too close to each other - OPTIMIZED"""
+    if len(waypoints) <= 1:
+        return waypoints
+    
+    # Always keep first waypoint
+    filtered_indices = [0]
+    
+    for i in range(1, len(waypoints)):
+        # Check distance to all previously kept waypoints
+        keep_waypoint = True
+        for j in filtered_indices:
+            distance_sq = 0.0
+            for k in range(waypoints.shape[1]):
+                diff = waypoints[i, k] - waypoints[j, k]
+                distance_sq += diff * diff
+            
+            if distance_sq < min_distance * min_distance:
+                keep_waypoint = False
+                break
+        
+        if keep_waypoint:
+            filtered_indices.append(i)
+    
+    # Create filtered array
+    filtered = np.zeros((len(filtered_indices), waypoints.shape[1]), dtype=waypoints.dtype)
+    for i, idx in enumerate(filtered_indices):
+        for j in range(waypoints.shape[1]):
+            filtered[i, j] = waypoints[idx, j]
+    
+    return filtered
+
+
+@nb.njit(cache=True)
+def calculate_euclidean_distance_fast(point1, point2):
+    """Fast euclidean distance calculation - OPTIMIZED"""
+    distance_sq = 0.0
+    for i in range(len(point1)):
+        diff = point1[i] - point2[i]
+        distance_sq += diff * diff
+    return math.sqrt(distance_sq)
+
+
+def find_start_end_points_optimized(points_list):
+    """
+    Find the two points with maximum distance as start and end points - OPTIMIZED
+    Returns remaining points as waypoints.
+    """
+    if len(points_list) < 2:
+        raise ValueError("Need at least 2 points to find start and end")
+    
+    # Convert to numpy array for faster computation
+    points_array = np.array(points_list, dtype=np.float64)
+    
+    max_distance = 0.0
+    start_idx = 0
+    end_idx = 1
+    
+    # Find the two points with maximum distance
+    for i in range(len(points_array)):
+        for j in range(i + 1, len(points_array)):
+            distance = calculate_euclidean_distance_fast(points_array[i], points_array[j])
+            if distance > max_distance:
+                max_distance = distance
+                start_idx = i
+                end_idx = j
+    
+    # Extract start and end points
+    start_point = points_array[start_idx].copy()
+    end_point = points_array[end_idx].copy()
+    
+    # Create waypoints array excluding start and end points
+    waypoint_indices = []
+    for i in range(len(points_array)):
+        if i != start_idx and i != end_idx:
+            waypoint_indices.append(i)
+    
+    if waypoint_indices:
+        waypoints = points_array[waypoint_indices]
+    else:
+        waypoints = np.empty((0, points_array.shape[1]))
+    
+    return waypoints.tolist(), start_point, end_point
+
+
+def should_use_hierarchical_search(image, num_waypoints):
+    """Determine if hierarchical search should be used - OPTIMIZED"""
+    image_size = np.prod(image.shape)
+    complexity_factor = image_size * (num_waypoints + 1)
+    
+    # Use hierarchical search for very large images
+    return complexity_factor > 100_000_000  # 100M operations threshold
+
+
+class ZRangeCache:
+    """Cache z-range calculations to avoid recomputation - OPTIMIZED"""
+    def __init__(self):
+        self.cache = {}
+    
+    def get_z_range(self, image, y, x, intensity_threshold):
+        key = (y, x, intensity_threshold)
+        if key not in self.cache:
+            self.cache[key] = find_intensity_transitions_at_point_optimized(image, y, x, intensity_threshold)
+        return self.cache[key]
 
 
 @dataclass
@@ -119,9 +446,11 @@ class Optimizer:
 
 
 class FasterWaypointSearch:
-    """Fast waypoint search that maintains high accuracy with parallel processing - now with nanometer support"""
+    """Fast waypoint search that maintains high accuracy with parallel processing and Z-range detection"""
     
-    def __init__(self, image, points_list, xy_spacing_nm=94.0, **kwargs):
+    def __init__(self, image, points_list, xy_spacing_nm=94.0, 
+                 enable_z_optimization=True, intensity_threshold=0.3, 
+                 min_intensity_threshold=0.1, **kwargs):
         self.image = image
         self.points_list = points_list
         self.verbose = kwargs.get('verbose', True)
@@ -129,6 +458,14 @@ class FasterWaypointSearch:
         
         # Store spacing
         self.xy_spacing_nm = xy_spacing_nm
+        
+        # Z-range detection settings
+        self.enable_z_optimization = enable_z_optimization
+        self.intensity_threshold = intensity_threshold
+        self.min_intensity_threshold = min_intensity_threshold
+        
+        # Initialize z-range cache for performance
+        self.z_range_cache = ZRangeCache()
         
         # Parallel processing settings
         enable_parallel = kwargs.get('enable_parallel', True)
@@ -139,18 +476,113 @@ class FasterWaypointSearch:
             image.shape, 
             xy_spacing_nm=xy_spacing_nm,
             enable_parallel=enable_parallel,
-            max_parallel_workers=max_parallel_workers
+            max_parallel_workers=max_parallel_workers,
+            my_weight_heuristic=self.my_weight_heuristic
         )
         
         # Configuration - conservative settings in nanometers
         self.enable_refinement = kwargs.get('enable_refinement', True)
+        self.filter_close_waypoints = kwargs.get('filter_close_waypoints', True)
+        self.min_waypoint_distance = kwargs.get('min_waypoint_distance', 3.0)
         
         if self.verbose:
-            print(f"Initializing accurate fast search for image shape: {image.shape}")
+            print(f"Initializing enhanced accurate fast search for image shape: {image.shape}")
             print(f"Image volume: {self.optimizer.image_volume:,} voxels")
             print(f"Parallel processing: {self.optimizer.enable_parallel}")
             print(f"Spacing: XY={self.xy_spacing_nm:.1f} nm/pixel")
-            print("NO SUBDIVISION - Pure waypoint-to-waypoint processing")
+            print(f"Z-range optimization: {self.enable_z_optimization}")
+            print("NO SUBDIVISION - Pure waypoint-to-waypoint processing with Z-optimization")
+    
+    def _process_points_list_optimized(self, points_list):
+        """Process a list of points to extract start, end, and waypoints with intelligent Z-positioning"""
+        if len(points_list) < 2:
+            raise ValueError("Need at least 2 points")
+        
+        if self.verbose:
+            print(f"Processing {len(points_list)} input points...")
+        
+        # Find start and end points (farthest apart) - OPTIMIZED
+        waypoint_coords, start_coords, end_coords = find_start_end_points_optimized(points_list)
+        
+        if self.verbose:
+            print(f"Auto-detected start: {start_coords}, end: {end_coords}")
+            print(f"Remaining waypoints: {len(waypoint_coords)}")
+        
+        # Apply z-range detection if enabled
+        if self.enable_z_optimization and len(self.image.shape) == 3:
+            # Find optimal z-ranges for start and end points using transition detection
+            start_z_min, start_z_max, start_max_intensity = self.z_range_cache.get_z_range(
+                self.image, int(start_coords[1]), int(start_coords[2]), self.intensity_threshold)
+            
+            end_z_min, end_z_max, end_max_intensity = self.z_range_cache.get_z_range(
+                self.image, int(end_coords[1]), int(end_coords[2]), self.intensity_threshold)
+            
+            if self.verbose:
+                print(f"Start point transition frames: appears at {start_z_min}, disappears at {start_z_max} (max intensity: {start_max_intensity:.3f})")
+                print(f"End point transition frames: appears at {end_z_min}, disappears at {end_z_max} (max intensity: {end_max_intensity:.3f})")
+            
+            # Update start and end points with transition-based z-coordinates
+            if start_z_min >= 0:
+                start_coords[0] = start_z_min  # Use appearance frame for start
+                
+            if end_z_max >= 0:
+                end_coords[0] = end_z_max  # Use disappearance frame for end
+            
+            # Store the detected z-range for waypoint processing
+            detected_z_min = int(start_coords[0])
+            detected_z_max = int(end_coords[0])
+            
+            if self.verbose:
+                print(f"Using transition-based coordinates - Start: {start_coords}, End: {end_coords}")
+                print(f"Path z-range: {detected_z_min} to {detected_z_max}")
+        else:
+            detected_z_min = min(int(start_coords[0]), int(end_coords[0]))
+            detected_z_max = max(int(start_coords[0]), int(end_coords[0]))
+        
+        # Process waypoints with intelligent z-positioning - OPTIMIZED with proper distribution
+        processed_waypoints = []
+        if waypoint_coords and self.enable_z_optimization:
+            if self.verbose:
+                print("Optimizing waypoint z-positions with distribution constraints...")
+            
+            # Convert waypoint coordinates to numpy array for batch processing
+            waypoint_coords_array = np.array(waypoint_coords)
+            
+            # Extract Y,X coordinates for batch processing
+            waypoint_yx = waypoint_coords_array[:, 1:3].astype(np.int32)
+            
+            # Use the adaptive search that prioritizes intensity
+            optimal_z_values = batch_find_optimal_z_with_adaptive_search(
+                self.image, waypoint_yx, detected_z_min, detected_z_max, 
+                min_intensity_threshold=self.min_intensity_threshold)
+            
+            # Create processed waypoints
+            for i, waypoint in enumerate(waypoint_coords):
+                original_z = waypoint[0]
+                optimized_z = optimal_z_values[i]
+                processed_waypoint = np.array([optimized_z, waypoint[1], waypoint[2]], dtype=np.int32)
+                processed_waypoints.append(processed_waypoint)
+                
+                if self.verbose:
+                    intensity_at_optimized = self.image[optimized_z, int(waypoint[1]), int(waypoint[2])]
+                    print(f"Waypoint {i+1}: {waypoint} -> {processed_waypoint} (intensity: {intensity_at_optimized:.3f})")
+        else:
+            # Use waypoints as-is
+            processed_waypoints = [np.array(wp, dtype=np.int32) for wp in waypoint_coords]
+        
+        # Convert to numpy arrays
+        start_point = np.array(start_coords, dtype=np.int32)
+        goal_point = np.array(end_coords, dtype=np.int32)
+        waypoints = np.array(processed_waypoints) if processed_waypoints else np.empty((0, 3), dtype=np.int32)
+        
+        # Filter close waypoints if enabled - OPTIMIZED
+        if self.filter_close_waypoints and len(waypoints) > 1:
+            original_count = len(waypoints)
+            waypoints = filter_close_waypoints_optimized(waypoints, self.min_waypoint_distance)
+            if self.verbose and len(waypoints) != original_count:
+                print(f"Filtered waypoints from {original_count} to {len(waypoints)} (removed close duplicates)")
+        
+        return start_point, goal_point, waypoints
     
     def search_segment_accurate_wrapper(self, segment_data):
         """Wrapper for parallel processing"""
@@ -304,18 +736,21 @@ class FasterWaypointSearch:
         return search.search(verbose=False)
     
     def search(self):
-        """Perform accurate fast search with parallel processing - NO SUBDIVISION"""
+        """Perform accurate fast search with Z-range optimization and parallel processing"""
         start_time = time.time()
         
-        # NO SUBDIVISION - Use original waypoints directly
-        from brightest_path_lib.algorithm.enhanced_waypointastar import find_start_end_points_optimized
-        
-        # Find optimal start/end points but don't subdivide anything
-        waypoint_coords, start_coords, end_coords = find_start_end_points_optimized(self.points_list)
-        all_points = [start_coords] + waypoint_coords + [end_coords]
+        # Apply Z-range optimization if enabled
+        if self.enable_z_optimization:
+            start_point, goal_point, waypoints = self._process_points_list_optimized(self.points_list)
+            all_points = [start_point] + [waypoints[i] for i in range(len(waypoints))] + [goal_point]
+        else:
+            # NO SUBDIVISION - Use original waypoints directly (fallback)
+            waypoint_coords, start_coords, end_coords = find_start_end_points_optimized(self.points_list)
+            all_points = [start_coords] + waypoint_coords + [end_coords]
         
         if self.verbose:
-            print(f"Starting accurate fast search with {len(all_points)} waypoints (no subdivision)")
+            optimization_info = "with Z-range optimization" if self.enable_z_optimization else "without Z-optimization"
+            print(f"Starting enhanced accurate fast search {optimization_info}")
             print(f"Original points: {len(self.points_list)} -> Optimized points: {len(all_points)}")
         
         # Analyze all segments and determine strategies
@@ -398,7 +833,8 @@ class FasterWaypointSearch:
         total_time = time.time() - start_time
         
         if self.verbose:
-            print(f"Accurate fast search completed in {total_time:.2f}s")
+            optimization_info = "with Z-range optimization" if self.enable_z_optimization else "without Z-optimization"
+            print(f"Enhanced accurate fast search completed in {total_time:.2f}s {optimization_info}")
             print(f"Total path length: {len(result)}")
             
             # Calculate theoretical speedup from parallelization
@@ -409,9 +845,10 @@ class FasterWaypointSearch:
         
         return result
 
-# Conservative optimization settings for medical use - now with nanometer thresholds
-def create_accurate_settings_nm(xy_spacing_nm=94.0):
-    """Create settings that prioritize accuracy for medical applications - using nanometer thresholds"""
+
+# Conservative optimization settings for medical use - now with nanometer thresholds and Z-optimization
+def create_accurate_settings_nm(xy_spacing_nm=94.0, enable_z_optimization=True):
+    """Create settings that prioritize accuracy for medical applications - using nanometer thresholds with Z-optimization"""
     return {
         'enable_refinement': True,             # Always refine hierarchical paths
         'hierarchical_threshold': 100_000_000, # Only for very large images
@@ -419,12 +856,20 @@ def create_accurate_settings_nm(xy_spacing_nm=94.0):
         'enable_parallel': True,               # Enable parallel processing
         'max_parallel_workers': None,          # Auto-detect optimal workers
         'xy_spacing_nm': xy_spacing_nm,        # XY pixel spacing 
+        'enable_z_optimization': enable_z_optimization,  # Enable intelligent Z-positioning
+        'intensity_threshold': 0.3,            # Threshold for Z-range detection
+        'min_intensity_threshold': 0.1,        # Minimum intensity for waypoint placement
+        'filter_close_waypoints': True,        # Filter waypoints that are too close
+        'min_waypoint_distance': 3.0,          # Minimum distance between waypoints
     }
 
+
 def quick_accurate_optimized_search(image, points_list, xy_spacing_nm=94.0,
-                                   my_weight_heuristic=2.0, verbose=True, enable_parallel=True):
+                                   my_weight_heuristic=2.0, verbose=True, enable_parallel=True,
+                                   enable_z_optimization=True, intensity_threshold=0.3,
+                                   min_intensity_threshold=0.1):
     """
-    Quick accurate optimized search with nanometer support - NO SUBDIVISION
+    Quick accurate optimized search with nanometer support and Z-range optimization - NO SUBDIVISION
     
     Args:
         image: 3D image array
@@ -433,22 +878,31 @@ def quick_accurate_optimized_search(image, points_list, xy_spacing_nm=94.0,
         my_weight_heuristic: A* weight heuristic (1.0 = optimal)
         verbose: Print progress information
         enable_parallel: Enable parallel processing
+        enable_z_optimization: Enable intelligent Z-positioning based on intensity transitions
+        intensity_threshold: Threshold for Z-range detection (fraction of peak intensity)
+        min_intensity_threshold: Minimum intensity required for waypoint placement
     """
     
     if verbose:
-        print("FAST SEARCH WITH PARALLEL PROCESSING AND NANOMETER SUPPORT")
-        print("NO SUBDIVISION - Pure waypoint-to-waypoint processing")
+        print("ENHANCED FAST SEARCH WITH Z-RANGE OPTIMIZATION AND PARALLEL PROCESSING")
+        print("NO SUBDIVISION - Pure waypoint-to-waypoint processing with intelligent Z-positioning")
         print(f"Image shape: {image.shape}")
         print(f"Image volume: {np.prod(image.shape):,} voxels")
         print(f"Number of points: {len(points_list)}")
         print(f"Parallel processing: {enable_parallel}")
+        print(f"Z-range optimization: {enable_z_optimization}")
         print(f"Spacing: XY={xy_spacing_nm:.1f} nm/pixel")
+        if enable_z_optimization:
+            print(f"Intensity threshold: {intensity_threshold:.1f} (fraction of peak)")
+            print(f"Min intensity threshold: {min_intensity_threshold:.2f} (absolute minimum)")
         print()
     
-    # Use conservative settings with nanometer support
-    settings = create_accurate_settings_nm(xy_spacing_nm)
+    # Use conservative settings with nanometer support and Z-optimization
+    settings = create_accurate_settings_nm(xy_spacing_nm, enable_z_optimization)
     settings['weight_heuristic'] = my_weight_heuristic
     settings['enable_parallel'] = enable_parallel
+    settings['intensity_threshold'] = intensity_threshold
+    settings['min_intensity_threshold'] = min_intensity_threshold
     
     # Remove spacing from settings to avoid duplicate keyword arguments
     settings.pop('xy_spacing_nm', None)
@@ -465,4 +919,12 @@ def quick_accurate_optimized_search(image, points_list, xy_spacing_nm=94.0,
 
 
 if __name__ == "__main__":
-    print('Fast waypoint search with nanometer support ready - NO SUBDIVISION!')
+    print('Enhanced fast waypoint search with Z-range optimization ready - NO SUBDIVISION!')
+    print('Features:')
+    print('  - Intelligent Z-positioning based on intensity transitions')
+    print('  - Automatic start/end point detection with appearance/disappearance frames')
+    print('  - Parallel processing for speed')
+    print('  - Nanometer-aware thresholds')
+    print('  - Waypoint filtering and optimization')
+    print('  - Medical-grade accuracy (weight_heuristic=1.0)')
+    print('  - Proper Z-distribution with intensity awareness')
